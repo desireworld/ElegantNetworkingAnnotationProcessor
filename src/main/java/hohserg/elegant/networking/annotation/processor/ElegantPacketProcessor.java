@@ -1,9 +1,9 @@
 package hohserg.elegant.networking.annotation.processor;
 
 import com.google.common.collect.ImmutableSet;
+import hohserg.elegant.networking.Refs;
 import hohserg.elegant.networking.annotation.processor.dom.ClassRepr;
 import hohserg.elegant.networking.annotation.processor.dom.DataClassRepr;
-import hohserg.elegant.networking.annotation.processor.dom.FieldRepr;
 import hohserg.elegant.networking.api.ElegantPacket;
 import lombok.SneakyThrows;
 
@@ -17,6 +17,11 @@ import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
+import javax.tools.FileObject;
+import javax.tools.StandardLocation;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -67,9 +72,18 @@ public class ElegantPacketProcessor extends AbstractProcessor {
         }
 
         List<TypeElement> sortedPackets = elegantPackets.stream().sorted(Comparator.comparing(e -> e.getQualifiedName().toString())).collect(Collectors.toList());
+        List<TypeElement> clientEl = new ArrayList<>();
+        List<TypeElement> serverEl = new ArrayList<>();
+        List<String> serializers = new ArrayList<>();
         for (int i = 0; i < sortedPackets.size(); i++) {
             int packetId = i + 1;
             TypeElement packet = sortedPackets.get(i);
+            if (havePacketInterface(packet, Refs.ClientToServerPacket_name)) {
+                clientEl.add(packet);
+            }
+            if (havePacketInterface(packet, Refs.ServerToClientPacket_name)) {
+                serverEl.add(packet);
+            }
             currentElement = packet;
             try {
                 DataClassRepr classRepr = prepare(packet);
@@ -85,6 +99,7 @@ public class ElegantPacketProcessor extends AbstractProcessor {
 
                 generateSerializerSource(classRepr, serializableTypes, packetId)
                         .writeTo(filer);
+                serializers.add(packet.getQualifiedName().toString() + "Serializer");
             } catch (Exception e) {
                 if (options.containsKey(printDetailsOption))
                     error(packet, "Failure on building serializer: \n" + e + "\n" + Arrays.stream(e.getStackTrace()).map(StackTraceElement::toString).collect(joining("\n")));
@@ -92,6 +107,14 @@ public class ElegantPacketProcessor extends AbstractProcessor {
                     error(packet, "Failure on building serializer: " + e.getMessage());
             }
         }
+
+        writeService(clientEl, Refs.ClientToServerPacket_name);
+        writeService(serverEl, Refs.ServerToClientPacket_name);
+        writeSerializable(serializers, Refs.ISerializer_name);
+//        if (havePacketInterface(packet, Refs.ServerToClientPacket_name)) {
+//
+//        }
+//        writeService(sortedPackets.stream().filter(typeElement -> havePacketInterface(typeElement, Refs.ServerToClientPacket_name)));
         return false;
     }
 
@@ -130,6 +153,22 @@ public class ElegantPacketProcessor extends AbstractProcessor {
         }
     }
 
+    private static boolean havePacketInterface(TypeElement typeElement, String name) {
+        TypeElement currentClass = typeElement;
+        while (true) {
+            for (TypeMirror anInterface : currentClass.getInterfaces())
+                if (anInterface.toString().equals(name))
+                    return true;
+
+            TypeMirror superClassType = currentClass.getSuperclass();
+
+            if (superClassType.getKind() == TypeKind.NONE)
+                return false;
+
+            currentClass = (TypeElement) typeUtils.asElement(superClassType);
+        }
+    }
+
     private static Element currentElement;
 
     public static void note(String msg) {
@@ -150,6 +189,39 @@ public class ElegantPacketProcessor extends AbstractProcessor {
 
     private void error(Element e, String msg) {
         messager.printMessage(Diagnostic.Kind.ERROR, msg, e);
+    }
+
+    private void writeService(List<TypeElement> providers, String service) throws IOException {
+        if (providers.size() > 0) {
+            try {
+                FileObject f = filer.createResource(StandardLocation.CLASS_OUTPUT,
+                        "", Refs.getServicePath(service));
+                try (Writer w = new OutputStreamWriter(f.openOutputStream(), "UTF-8")) {
+                    for (TypeElement typeElement : providers) {
+                        w.write(typeElement.getQualifiedName().toString());
+                    }
+                }
+            } catch (FilerException e) {
+
+            }
+        }
+    }
+
+    private void writeSerializable(List<String> providers, String service) throws IOException {
+        if (providers.size() > 0) {
+            try {
+                FileObject f = filer.createResource(StandardLocation.CLASS_OUTPUT,
+                        "", Refs.getServicePath(service));
+                try (Writer w = new OutputStreamWriter(f.openOutputStream(), "UTF-8")) {
+                    for (String name : providers) {
+                        w.write(name);
+                    }
+                }
+            } catch (FilerException e) {
+
+            }
+
+        }
     }
 
     @Override
